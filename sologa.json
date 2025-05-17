@@ -1,0 +1,43 @@
+{
+    "simulation": {
+        "a_levels_to_evaluate": [1.0, 2.0, 4.0, 6.0, 8.0 ],
+        "dt": 0.01,
+        "max_steps_per_round": 600,
+        "num_processes": 94,
+        "max_unstable_steps_allowed": 50
+    },
+    "controller": {
+        "tau_borders": [0.01, 2.0],
+        "bias_borders": [-5.0, 5.0],
+        "weights_borders": [-5.0, 5.0],
+        "t_decay_rate": 0.9,
+        "t_accumulation_rate": 0.9,
+        "t_level_clip": [0.0, 10.0]
+    },
+    "fitness": {
+        "leg_up_threshold": 0.6,
+        "mean_step_bonus_factor": 0.8,
+        "penalty_load_bearing_factor": 0.25,
+        "rhythmicity_bonus_factor": 0.04,
+        "step_duration_variance_penalty_factor": 30.0,
+        "time_bonus_factor": 0.01,
+        "no_step_penalty": 20.0,
+        "instability_penalty_power": 9.0,
+        "min_step_down_duration": 0.25,
+        "min_step_up_duration": 0.25
+    },
+    "genetic_algorithm": {
+        "population_size": 1000,
+        "generations": 9999,
+        "mutation_strength": 0.05,
+        "crossover_rate": 0.1,
+        "initial_population_dir": "ga_results_20250516_213556_A1p0_2p0_4p0/backups/gen_1301", 
+        "num_backups_to_save": 100,
+        "a_weights": [12.0, 6.0, 3.0, 2.0, 1.0]
+    },
+    "logging": {
+        "save_interval": 50,
+        "plot_interval": 20,
+        "base_dir_template": "./ga_results_{timestamp}_A{a_levels}"
+    }
+}
