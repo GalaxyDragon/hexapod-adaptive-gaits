@@ -30,7 +30,6 @@ RIGHT_MOTOR_NEURONS = np.array([7, 9, 11])
 INTER_L_INDICES = np.array([0, 1, 2])
 INTER_R_INDICES = np.array([3, 4, 5])
 
-# --- Классы Controller, HexapodState, Hexapod, Environment (без изменений) ---
 class Controller:
     def __init__(self, config: Dict[str, Any], links: List[Tuple[int, int]]):
         self.num_neurons = TOTAL_NEURONS
@@ -83,7 +82,7 @@ class Controller:
         return self.outputs
 
     def reset_state(self):
-        self.membranes = - self.bias # np.zeros(self.num_neurons)
+        self.membranes = - self.bias -0.5 
         self.outputs = np.zeros(self.num_neurons)
         self.t_level = 0.0
 
@@ -102,7 +101,6 @@ class Controller:
             raise ValueError("Отсутствуют необходимые ключи в словаре параметров.")
         if params_dict['bias'].shape != (self.num_neurons,):
             raise ValueError(f"Неверная размерность bias: {params_dict['bias'].shape}")
-        self.tau = params_dict['tau']
         self.bias = params_dict['bias']
         self.weights = params_dict['weights']
         self.weights_A = params_dict['weights_A']
@@ -269,7 +267,6 @@ class Environment:
         if self.load_bearing_cost_history: return np.sum(self.load_bearing_cost_history) * self.dt
         else: return 0.0
 
-# --- Функции расчета метрик  ---
 def calculate_rhythmicity_bonus(states: List[HexapodState], motor_indices: np.ndarray) -> float:
     num_states = len(states)
     if num_states < 20: return 0.0
@@ -277,6 +274,7 @@ def calculate_rhythmicity_bonus(states: List[HexapodState], motor_indices: np.nd
     motor_activations = activations_history[:, motor_indices]
     num_steps, num_motors = motor_activations.shape
     max_magnitudes = []
+    activations_variance = np.var(motor_activations, axis=1)
     for i in range(num_motors):
         signal = motor_activations[:, i] - np.mean(motor_activations[:, i])
         fft_result = fft(signal)
@@ -306,7 +304,13 @@ def calculate_fitness_components(env_results: Dict[str, Any], config: Dict[str, 
     components['penalty_no_steps'] = -fitness_cfg['no_step_penalty'] if min_steps == 0 and total_steps_run > 0 else 0.0
     components['penalty_inactive_legs'] = -fitness_cfg['no_step_penalty'] * env_results['inactive_legs']
     components['penalty_inactive_legs'] = -fitness_cfg['no_step_penalty']* 10 *env_results['bid_step_diff']
-
+    step_diff_penalty_val = 0
+    leg_counts = env_results.get('leg_step_counts_raw', np.zeros(NUM_LEGS)) 
+    if len(leg_counts) > 0 and total_steps_run > 10 and np.mean(leg_counts) > 0.5 : 
+        diff = np.max(leg_counts) - np.min(leg_counts)
+        if diff > 3 : 
+             step_diff_penalty_val = -fitness_cfg['no_step_penalty'] * 1.5 * (diff / (np.mean(leg_counts) + 1e-6)) 
+    components['penalty_step_diff_legs'] = step_diff_penalty_val
     base_fitness = sum(components.values())
     instability_penalty_power = fitness_cfg['instability_penalty_power']
     if base_fitness < 0: fitness_multiplier = (1.0 + unstable_ratio)**instability_penalty_power
@@ -317,7 +321,6 @@ def calculate_fitness_components(env_results: Dict[str, Any], config: Dict[str, 
     components['final_fitness'] = final_fitness
     return components
 
-# --- Функция оценки агента ---
 def evaluate_agent_weighted_sum(args: Tuple[Dict[str, Any], Dict[str, Any], List[Tuple[int, int]], List[float]]) -> Dict[str, Any]:
     controller_params_dict, config, links, a_weights = args
     a_levels_to_evaluate = config['simulation']['a_levels_to_evaluate']
@@ -346,9 +349,10 @@ def evaluate_agent_weighted_sum(args: Tuple[Dict[str, Any], Dict[str, Any], List
                 'a_level': current_a_level,
                 'min_leg_steps': env.leg_step_counts.min() if env.current_step > 0 else 0,
                 'inactive_legs': (env.leg_step_counts==0).sum() if env.current_step > 0 else 6,
+                'leg_step_counts_raw': env.leg_step_counts.copy(), 
                 'bid_step_diff': (1 if (env.leg_step_counts.min() - env.leg_step_counts.max()) > 5 else 0) if env.current_step > 0 else 1,
                 'mean_leg_steps': env.leg_step_counts.mean() if env.current_step > 0 else 0.0,
-                'step_len_ratio': np.clip(np.hstack(env.leg_up_durations, dtype=np.float64)/config['fitness']['min_step_up_duration'], 0.0, 1.0).mean()**1.5 if env.leg_step_counts.mean() > 0 else 1.0,
+                'step_len_ratio': np.clip(np.hstack(env.leg_up_durations, dtype=np.float64)/config['fitness']['min_step_up_duration'], 0.0, 1.0).mean()**2 if env.leg_step_counts.mean() > 0 else 1.0,
                 'average_load_bearing_cost': env.get_average_load_bearing_cost(),
                 'step_duration_variance': env.get_step_duration_variance(),
                 'total_steps_run': env.current_step,
@@ -359,6 +363,7 @@ def evaluate_agent_weighted_sum(args: Tuple[Dict[str, Any], Dict[str, Any], List
                 'total_cpg_t_level': np.sum(env.cpg_t_level_history) * env.dt if env.cpg_t_level_history else 0.0,
                 'rhythmicity_score': calculate_rhythmicity_bonus(env.states, sim_controller.motor_neuron_indices),
             }
+            
             fitness_components = calculate_fitness_components(env_results, config, current_a_level)
             fitness = fitness_components['final_fitness']
             weighted_fitness = a_weights[idx] * fitness
@@ -375,7 +380,6 @@ def evaluate_agent_weighted_sum(args: Tuple[Dict[str, Any], Dict[str, Any], List
         'error': False
     }
 
-# --- Функции мутации, кроссовера, получения состояний, определения связей ---
 def mutate(parent_params_dict: Dict[str, Any], config: Dict[str, Any], links: List[Tuple[int, int]]) -> Optional[Controller]:
     mutation_strength = config['genetic_algorithm']['mutation_strength']
     try:
@@ -468,7 +472,6 @@ def train(config: Dict[str, Any]):
     plot_interval = log_cfg['plot_interval']
     base_dir_template = log_cfg['base_dir_template']
 
-    # Настройка директорий
     a_level_str = "_".join([f"{a:.1f}".replace('.', 'p') for a in a_levels_to_evaluate])
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     base_dir = base_dir_template.format(a_levels=a_level_str, timestamp=timestamp)
@@ -485,14 +488,12 @@ def train(config: Dict[str, Any]):
         print(f"Ошибка сохранения конфигурации: {e}")
     links = define_links()
 
-    # Инициализация лог-файла для лучшей модели
     log_file_path = os.path.join(base_dir, 'best_model_log.txt')
     with open(log_file_path, 'w') as f:
         f.write("Лог лучших моделей по поколениям\n")
         f.write(f"{'Поколение':<10} {'Общий фитнес':<15} {'Фитнес по уровням A':<50}\n")
         f.write("-" * 75 + "\n")
 
-    # Инициализация популяции P0
     population = []
     loaded_count = 0
     if initial_population_dir and os.path.isdir(initial_population_dir):
@@ -519,7 +520,6 @@ def train(config: Dict[str, Any]):
             controller = Controller(config=config, links=links)
             population.append({'params': controller.get_params_dict(), 'id': len(population)})
 
-    # Оценка начальной популяции P0
     print("--- Оценка начальной популяции P0 ---")
     eval_args = [(ind['params'], config, links, a_weights) for ind in population]
     initial_evaluation_results = []
@@ -540,16 +540,13 @@ def train(config: Dict[str, Any]):
             population[i]['fitness'] = -1e9
             population[i]['eval_data'] = []
 
-    # Логирование лучшей модели для поколения 0
     best_agent = max(population, key=lambda x: x['fitness'])
     fitness_per_a = [eval_data['final_fitness'] for eval_data in best_agent['eval_data']]
     with open(log_file_path, 'a') as f:
         f.write(f"{0:<10} {best_agent['fitness']:<15.4f} {str(fitness_per_a):<50}\n")
 
-    # Основной цикл GA
     for gen in range(generations):
         print(f"\n--- Поколение {gen+1}/{generations} ---")
-        # Отбор родителей (турнирный отбор)
         parents = []
         for _ in range(population_size):
             idx1, idx2 = np.random.choice(len(population), 2, replace=False)
@@ -558,9 +555,8 @@ def train(config: Dict[str, Any]):
             else:
                 parents.append(population[idx2])
 
-        # Создание потомков (кроссовер и мутация)
         offspring_population = []
-        for j in range(0, population_size*2, 2):
+        for j in range(0, population_size*4, 2):
             i = j%population_size
             parent1 = parents[i]
             parent2 = parents[i+1] if i+1 < population_size else parents[i]
@@ -579,7 +575,6 @@ def train(config: Dict[str, Any]):
             if child2:
                 offspring_population.append({'params': child2.get_params_dict(), 'id': f"g{gen+1}_o{i+1}"})
 
-        # Оценка потомков
         offspring_eval_args = [(ind['params'], config, links, a_weights) for ind in offspring_population]
         offspring_evaluation_results = []
         try:
@@ -596,22 +591,18 @@ def train(config: Dict[str, Any]):
                 offspring_population[i]['fitness'] = -1e9
                 offspring_population[i]['eval_data'] = []
 
-        # Объединение популяции и отбор лучших
         combined_population = population + offspring_population
         combined_population.sort(key=lambda x: x['fitness'], reverse=True)
         population = combined_population[:population_size]
 
-        # Логирование лучшей модели текущего поколения
         best_agent = population[0]
         fitness_per_a = [eval_data['final_fitness'] for eval_data in best_agent['eval_data']]
         with open(log_file_path, 'a') as f:
             f.write(f"{gen+1:<10} {best_agent['fitness']:<15.4f} {str(fitness_per_a):<50}\n")
-        # Сохранение параметров лучшей модели
         best_model_path = os.path.join(backup_dir, f'best_gen_{gen+1}_fit_{best_agent["fitness"]:.1f}.pkl')
         with open(best_model_path, 'wb') as f:
             pickle.dump(best_agent['params'], f)
 
-        # Логирование и графики
         if gen % plot_interval == 0 or gen == generations - 1:
             print("--- Детальное Логирование и Построение Графиков ---")
             gen_plots_dir = os.path.join(plots_dir, f'gen_{gen+1}')
@@ -628,7 +619,6 @@ def train(config: Dict[str, Any]):
                 w_fit = eval_data.get('weighted_fitness', 'N/A')
                 print(f"  Оценка при A={a:.2f}: Fitness={fit:.4f}, Weighted Fitness={w_fit:.4f}")
             
-            # Сохранение компонентов фитнеса в файл для каждого A
             for eval_data in best_agent['eval_data']:
                 a_level = eval_data.get('a_level', 'N/A')
                 a_str = f"{a_level:.1f}".replace('.', 'p')
@@ -655,7 +645,6 @@ def train(config: Dict[str, Any]):
                     f.write(f"  Причина нестабильности: {eval_data.get('first_instability_reason', 'Нет')}\n")
                 print(f"  Компоненты фитнеса для A={a_level:.1f} сохранены в {fitness_components_file}")
 
-            # Построение графиков
             pool_args_states = [(best_agent['params'], config, links, a_level) for a_level in a_levels_to_evaluate]
             states_results = []
             try:
@@ -718,18 +707,6 @@ def train(config: Dict[str, Any]):
                     plt.savefig(os.path.join(agent_plots_dir, f'motor_activation_A{a_str}.png'))
                     plt.close()
 
-                    # График T-level
-                    plt.figure(figsize=(10, 4))
-                    t_level_history_plot = np.array([s.T_level for s in agent_states])
-                    plt.plot(time_axis, t_level_history_plot, label='Уровень Усталости CPG (T)')
-                    plt.title(f'Уровень Усталости CPG (T) ({agent_label}) - A={a_level_target:.1f}')
-                    plt.xlabel('Время (с)')
-                    plt.ylabel('Уровень T')
-                    plt.grid(True)
-                    plt.legend()
-                    plt.tight_layout()
-                    plt.savefig(os.path.join(agent_plots_dir, f'cpg_tiredness_level_A{a_str}.png'))
-                    plt.close()
                 else:
                     print(f"    Предупреждение: Не удалось получить состояния для A={a_level_target:.1f}")
 
@@ -745,8 +722,7 @@ def train(config: Dict[str, Any]):
                     pickle.dump(agent_to_save['params'], f)
 
     print(f"\n--- Обучение Завершено ---")
-    return population[0]  # Возвращаем лучшее решение
-# --- Функция загрузки конфигурации ---
+    return population[0]  
 def load_config(config_path: Optional[str]) -> Dict[str, Any]:
     default_config = {
         "simulation": {
@@ -810,7 +786,6 @@ def load_config(config_path: Optional[str]) -> Dict[str, Any]:
         else: config['simulation']['num_processes'] = min(config['simulation']['num_processes'], max_cpu)
     except NotImplementedError: config['simulation']['num_processes'] = 1
     return config
-# Основной блок
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Обучение CPG контроллера (GA с взвешенной суммой).")
     parser.add_argument('-c', '--config', type=str, default='./sologa.json', help="Путь к файлу конфигурации JSON.")
